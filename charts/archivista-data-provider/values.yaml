@@ -1,6 +1,6 @@
 certDir: /certs
 clientCAFile: /tmp/gatekeeper/ca.crt
-image: ghcr.io/chaosinthecrd/archivista-provider:latest
+image: ghcr.io/chaosinthecrd/archivista-provider@sha256:5f199aab13a43fe64225cf5ed5789502532753956aa4d0a9d9ecc539f86b532f
 port: 8090
 provider:
   # TODO: Fix timeout

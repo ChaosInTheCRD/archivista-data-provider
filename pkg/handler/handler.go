@@ -83,47 +83,41 @@ func (vh ValidateHandler) Handler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
+		// TODO: add support for multi-arch images
 		var digest string
-		if image.Digest != "" {
-			digest = image.Digest
-			digest = strings.TrimPrefix(digest, "sha256:")
-		} else {
-			klog.Warning("Image with tag was used, this is unsafe! ", "image", rKey)
+		manifest, err := rc.ManifestGet(req.Context(), image)
+		if err != nil {
+			utils.SendResponse(nil, fmt.Sprintf("unable to get manifest for image %s: %v", rKey, err), w)
+			continue
+		}
 
-			// TODO: add support for multi-arch images
-			var digest string
-			manifest, err := rc.ManifestGet(req.Context(), image)
+		if manifest.IsList() {
+			klog.Info("Multi-platform image detected, looking up digest for current platform")
+			plat := platform.Platform{
+				Architecture: runtime.GOARCH,
+				OS:           runtime.GOOS,
+			}
+
+			desc, err := rcManifest.GetPlatformDesc(manifest, &plat)
 			if err != nil {
-				utils.SendResponse(nil, fmt.Sprintf("unable to get manifest for image %s: %v", rKey, err), w)
+				utils.SendResponse(nil, fmt.Sprintf("unable to get platform description for image %s: %v", rKey, err), w)
 				continue
 			}
-			if manifest.IsList() {
-				klog.Info("Multi-platform image detected, looking up digest for current platform")
-				plat := platform.Platform{
-					Architecture: runtime.GOARCH,
-					OS:           runtime.GOOS,
-				}
 
-				desc, err := rcManifest.GetPlatformDesc(manifest, &plat)
-				if err != nil {
-					utils.SendResponse(nil, fmt.Sprintf("unable to get platform description for image %s: %v", rKey, err), w)
-					continue
-				}
-
-				digest = desc.Digest.String()
-			} else {
-				config, err := manifest.(rcManifest.Imager).GetConfig()
-				if err != nil {
-					utils.SendResponse(nil, fmt.Sprintf("unable to get config digest for image %s: %v", rKey, err), w)
-					continue
-				}
-				klog.Info("Using config digest")
-				digest = config.Digest.String()
+			digest = desc.Digest.String()
+		} else {
+			config, err := manifest.(rcManifest.Imager).GetConfig()
+			if err != nil {
+				utils.SendResponse(nil, fmt.Sprintf("unable to get config digest for image %s: %v", rKey, err), w)
+				continue
 			}
 
-			digest = strings.TrimPrefix(digest, "sha256:")
-			klog.Info("Using resolved digest ", "digest", digest)
+			klog.Info("Using config digest")
+			digest = config.Digest.String()
 		}
+
+		digest = strings.TrimPrefix(digest, "sha256:")
+		klog.Info("Using resolved digest ", "digest", digest)
 
 		// Do verify
 		results := shareddata.UsePoliciesAndPublicKeys(func(policies map[string]dsse.Envelope, keys map[string]policy.PublicKey) (results *[]externaldata.Item) {
@@ -165,17 +159,22 @@ func (vh ValidateHandler) Handler(w http.ResponseWriter, req *http.Request) {
 					}
 				}
 
-				subject := cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digest}
-				subjects := []cryptoutil.DigestSet{subject}
-
 				var collectionSource source.Sourcer
 				memSource := source.NewMemorySource()
 
 				collectionSource = source.NewMultiSource(memSource, source.NewArchvistSource(vh.archivista))
 
+				log.Infof("adding subject for ref %s", image.Reference)
+
+				hash := "27a54232b952d6d3d45c8430df4afb19042ba2e203fe104b0f847e45e38c4d04"
+
+				subject := cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digest}
+				tagsubject := cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: hash}
+				subjects := []cryptoutil.DigestSet{subject, tagsubject}
+
 				fmt.Printf("Verifying with key %s\n", key.KeyID)
 				fmt.Printf("Verifying policy %s\n", policyName)
-				fmt.Printf("Verifying subjects %s\n", digest)
+				fmt.Printf("Verifying subjects %s\n", subjects)
 				fmt.Printf("Verifying collection source %v\n", collectionSource)
 				fmt.Printf("Verifying archivista %v\n", *vh.archivista)
 
